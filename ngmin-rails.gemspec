@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
   spec.email         = ["jason.p.morrison@gmail.com", "brandon@brandontilley.com"]
   spec.description   = %q{Use ngmin in the Rails asset pipeline.}
   spec.summary       = %q{Use ngmin in the Rails asset pipeline.}
-  spec.homepage      = ""
+  spec.homepage      = "https://github.com/jasonm/ngmin-rails"
   spec.license       = "MIT"
 
   spec.files         = `git ls-files`.split($/)
