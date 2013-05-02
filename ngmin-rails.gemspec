@@ -6,10 +6,10 @@ require 'ngmin/rails/version'
 Gem::Specification.new do |spec|
   spec.name          = "ngmin-rails"
   spec.version       = Ngmin::Rails::VERSION
-  spec.authors       = ["Jason Morrison"]
-  spec.email         = ["jason.p.morrison@gmail.com"]
-  spec.description   = %q{TODO: Write a gem description}
-  spec.summary       = %q{TODO: Write a gem summary}
+  spec.authors       = ["Jason Morrison", "Brandon Tilley"]
+  spec.email         = ["jason.p.morrison@gmail.com", "brandon@brandontilley.com"]
+  spec.description   = %q{Use ngmin in the Rails asset pipeline.}
+  spec.summary       = %q{Use ngmin in the Rails asset pipeline.}
   spec.homepage      = ""
   spec.license       = "MIT"
 
