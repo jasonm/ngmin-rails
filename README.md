@@ -1,6 +1,6 @@
 # Ngmin::Rails
 
-TODO: Write a gem description
+Use <https://github.com/btford/ngmin> in the Rails asset pipeline.
 
 ## Installation
 
@@ -18,7 +18,7 @@ Or install it yourself as:
 
 ## Usage
 
-TODO: Write usage instructions here
+That's it.
 
 ## Contributing
 
