@@ -1,7 +1,7 @@
 PATH
   remote: ../
   specs:
-    ngmin-rails (0.3.6)
+    ngmin-rails (0.3.7)
       rails (>= 3.1)
 
 GEM

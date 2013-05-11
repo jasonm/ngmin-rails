@@ -3928,6 +3928,7 @@ parseStatement: true, parseSourceElement: true */
 },{}],3:[function(require,module,exports){
 
 var deepApply = require('./deep-apply');
+var annotateInjectable = require('./annotate-injectable');
 
 
 // look for `modRef.fn` in AST
@@ -3937,7 +3938,7 @@ var signatures = require('../signatures/simple');
 /*
  * Modifies AST to add annotations to injectable AngularJS module methods
  */
-window.annotateAST = module.exports = function (syntax) {
+var annotateAST = module.exports = function (syntax) {
 
   // rewrite each matching chunk
   deepApply(syntax, signatures, function (chunk) {
@@ -3958,25 +3959,7 @@ window.annotateAST = module.exports = function (syntax) {
     if (type === 'constant' || type === 'value') {
       return;
     }
-    originalFn = chunk.arguments[argIndex];
-
-    // if there's nothing to inject, don't annotate
-    if (originalFn.params.length === 0) {
-      return;
-    }
-
-    newParam = chunk.arguments[argIndex] = {
-      type: 'ArrayExpression',
-      elements: []
-    };
-
-    originalFn.params.forEach(function (param) {
-      newParam.elements.push({
-        "type": "Literal",
-        "value": param.name
-      });
-    });
-    newParam.elements.push(originalFn);
+    chunk.arguments[argIndex] = annotateInjectable(chunk.arguments[argIndex]);
   });
 
 
@@ -4011,33 +3994,87 @@ window.annotateAST = module.exports = function (syntax) {
           "type": "FunctionExpression"
         }
       }], function (controllerChunk) {
-        var originalFn = controllerChunk.value;
-
-
-        // if there's nothing to inject, don't annotate
-        if (originalFn.params.length === 0) {
-          return;
-        }
-
-        var newParam = controllerChunk.value = {
-          type: 'ArrayExpression',
-          elements: []
-        };
-
-        originalFn.params.forEach(function (param) {
-          newParam.elements.push({
-            "type": "Literal",
-            "value": param.name
-          });
-        });
-        newParam.elements.push(originalFn);
+        controllerChunk.value = annotateInjectable(controllerChunk.value);
       });
+    });
+  });
+
+  // PDO annotations - defined by object
+
+  deepApply(syntax, [{
+    "type": "CallExpression",
+    "callee": {
+      "type": "MemberExpression",
+      "object": {
+        "ngModule": true
+      },
+      "property": {
+        "type": "Identifier",
+        "name": "provider"
+      }
+    }
+  }], function (providerChunk) {
+    deepApply(providerChunk, [{
+      "type": "ObjectExpression"
+    }], function(objectChunk) {
+      objectChunk.properties.forEach(function(property) {
+        deepApply(property, [{
+          "type": "Property",
+          "key": {
+            "type": "Identifier",
+            "name": "$get"
+          },
+          "value": {
+            "type": "FunctionExpression"
+          }
+        }], function(propertyChunk) {
+          propertyChunk.value = annotateInjectable(propertyChunk.value);
+        });
+      });
+    });
+  });
+
+  // PDO annotations - defined by function
+
+  deepApply(syntax, [{
+    "type": "CallExpression",
+    "callee": {
+      "type": "MemberExpression",
+      "object": {
+        "ngModule": true
+      },
+      "property": {
+        "type": "Identifier",
+        "name": "provider"
+      }
+    }
+  }], function (providerChunk) {
+    deepApply(providerChunk, [{
+      "type": "ExpressionStatement",
+      "expression": {
+        "type": "AssignmentExpression",
+        "left": {
+          "type": "MemberExpression",
+          "object": {
+            "type": "ThisExpression"
+          },
+          "property": {
+            "type": "Identifier",
+            "name": "$get"
+          }
+        },
+        "right": {
+          "type": "FunctionExpression"
+        }
+      }
+    }], function(pdoChunk) {
+      pdoChunk.expression.right = annotateInjectable(pdoChunk.expression.right);
     });
   });
 
 };
 
-},{"./deep-apply":6,"../signatures/simple":7}],8:[function(require,module,exports){
+},{"./deep-apply":6,"./annotate-injectable":7,"../signatures/simple":8}],9:[function(require,module,exports){
 /*
  * Identify AST blocks that refer to an AngularJS module
  */
@@ -4056,7 +4093,7 @@ module.exports = {
   }
 };
 
-},{}],7:[function(require,module,exports){
+},{}],8:[function(require,module,exports){
 
 /*
  * Simple AST structure to match against
@@ -4120,7 +4157,7 @@ module.exports = [
 
 ];
 
-},{}],9:[function(require,module,exports){
+},{}],10:[function(require,module,exports){
 module.exports = {
   "type": "VariableDeclarator",
   "init": {
@@ -4128,7 +4165,7 @@ module.exports = {
   }
 };
 
-},{}],10:[function(require,module,exports){
+},{}],11:[function(require,module,exports){
 module.exports = {
   "type": "ExpressionStatement",
   "expression": {
@@ -4143,7 +4180,32 @@ module.exports = {
   }
 };
 
-},{}],11:[function(require,module,exports){
+},{}],7:[function(require,module,exports){
+
+// given an AST chunk for a fn,
+// return an AST chunk representing an annotation array
+var annotateInjectable = module.exports = function (originalFn) {
+  // if there's nothing to inject, don't annotate
+  if (originalFn.params.length === 0) {
+    return originalFn;
+  }
+
+  var newParam = {
+    type: 'ArrayExpression',
+    elements: []
+  };
+
+  originalFn.params.forEach(function (param) {
+    newParam.elements.push({
+      "type": "Literal",
+      "value": param.name
+    });
+  });
+  newParam.elements.push(originalFn);
+  return newParam;
+};
+
+},{}],12:[function(require,module,exports){
 module.exports={
   "name": "escodegen",
   "description": "ECMAScript code generator",
@@ -4233,81 +4295,7 @@ var deepApply = module.exports = function (candidate, standards, cb) {
   });
 };
 
-},{"./deep-compare.js":12}],2:[function(require,module,exports){
-
-/*
- * Add {"ngModule": true} property to matching modules
- */
-
-var deepApply = require('./deep-apply');
-
-var signatures = [
-  require('../signatures/module')
-].concat(require('../signatures/simple'));
-
-var standards = [
-  require('../signatures/decl'),
-  require('../signatures/assign')
-];
-
-var clone = require('clone');
-
-var simpleSignatures = clone(require('../signatures/simple'));
-
-//TODO: honor scope
-// returns true iff there were things to annotate
-var markASTModules = module.exports = function (syntax) {
-  var changed = false;
-
-
-  deepApply(syntax, signatures, function (chunk) {
-    chunk.ngModule = true;
-    if (!chunk.ngModule) {
-      changed = true;
-    }
-  });
-
-  // module ref ids
-  var modules = [];
-
-  // grab all module ref ids
-  standards.forEach(function (standard) {
-    deepApply(syntax, standards, function (branch) {
-      var id;
-
-      try {
-        id = branch.id.name;
-      } catch (e) {
-        id = branch.expression.left.name;
-      }
-
-      if (modules.indexOf(id) === -1) {
-        modules.push(id);
-      }
-    });
-  });
-
-  var namedModuleMemberExpression = {
-    "type": "Identifier",
-    "name": new RegExp('^(' + modules.join('|') + ')$')
-  };
-
-  simpleSignatures = simpleSignatures.map(function (signature) {
-    signature.callee.object = namedModuleMemberExpression;
-    return signature;
-  });
-
-  deepApply(syntax, simpleSignatures, function (chunk) {
-    if (!chunk.callee.object.ngModule) {
-      changed = true;
-      chunk.callee.object.ngModule = true;
-    }
-  });
-
-  return changed;
-};
-
-},{"./deep-apply":6,"../signatures/module":8,"../signatures/simple":7,"../signatures/decl":9,"../signatures/assign":10,"clone":13}],5:[function(require,module,exports){
+},{"./deep-compare.js":13}],5:[function(require,module,exports){
 (function(global){/*
   Copyright (C) 2012 Michael Ficarra <escodegen.copyright@michael.ficarra.me>
   Copyright (C) 2012 Robert Gust-Bardon <donate@robert.gust-bardon.org>
@@ -6567,7 +6555,81 @@ var markASTModules = module.exports = function (syntax) {
 /* vim: set sw=4 ts=4 et tw=80 : */
 
 })(window)
-},{"./package.json":11,"estraverse":14,"source-map":15}],12:[function(require,module,exports){
+},{"./package.json":12,"estraverse":14,"source-map":15}],2:[function(require,module,exports){
+
+/*
+ * Add {"ngModule": true} property to matching modules
+ */
+
+var deepApply = require('./deep-apply');
+
+var signatures = [
+  require('../signatures/module')
+].concat(require('../signatures/simple'));
+
+var standards = [
+  require('../signatures/decl'),
+  require('../signatures/assign')
+];
+
+var clone = require('clone');
+
+var simpleSignatures = clone(require('../signatures/simple'));
+
+//TODO: honor scope
+// returns true iff there were things to annotate
+var markASTModules = module.exports = function (syntax) {
+  var changed = false;
+
+
+  deepApply(syntax, signatures, function (chunk) {
+    chunk.ngModule = true;
+    if (!chunk.ngModule) {
+      changed = true;
+    }
+  });
+
+  // module ref ids
+  var modules = [];
+
+  // grab all module ref ids
+  standards.forEach(function (standard) {
+    deepApply(syntax, standards, function (branch) {
+      var id;
+
+      try {
+        id = branch.id.name;
+      } catch (e) {
+        id = branch.expression.left.name;
+      }
+
+      if (modules.indexOf(id) === -1) {
+        modules.push(id);
+      }
+    });
+  });
+
+  var namedModuleMemberExpression = {
+    "type": "Identifier",
+    "name": new RegExp('^(' + modules.join('|') + ')$')
+  };
+
+  simpleSignatures = simpleSignatures.map(function (signature) {
+    signature.callee.object = namedModuleMemberExpression;
+    return signature;
+  });
+
+  deepApply(syntax, simpleSignatures, function (chunk) {
+    if (!chunk.callee.object.ngModule) {
+      changed = true;
+      chunk.callee.object.ngModule = true;
+    }
+  });
+
+  return changed;
+};
+
+},{"../signatures/module":9,"./deep-apply":6,"../signatures/simple":8,"../signatures/decl":10,"../signatures/assign":11,"clone":16}],13:[function(require,module,exports){
 /*
  * Checks each property of the standard recursively against the candidate,
  * ignoring additional properties of the candidate.
@@ -6935,7 +6997,7 @@ var deepCompare = module.exports = function (candidate, standard) {
 /* vim: set sw=4 ts=4 et tw=80 : */
 
 })()
-},{}],16:[function(require,module,exports){
+},{}],17:[function(require,module,exports){
 var events = require('events');
 
 exports.isArray = isArray;
@@ -7288,7 +7350,7 @@ exports.format = function(f) {
   return str;
 };
 
-},{"events":17}],18:[function(require,module,exports){
+},{"events":18}],19:[function(require,module,exports){
 require=(function(e,t,n,r){function i(r){if(!n[r]){if(!t[r]){if(e)return e(r);throw new Error("Cannot find module '"+r+"'")}var s=n[r]={exports:{}};t[r][0](function(e){var n=t[r][1][e];return i(n?n:e)},s,s.exports)}return n[r].exports}for(var s=0;s<r.length;s++)i(r[s]);return i})(typeof require!=="undefined"&&require,{1:[function(require,module,exports){
 exports.readIEEE754 = function(buffer, offset, isBE, mLen, nBytes) {
   var e, m,
@@ -11153,7 +11215,7 @@ SlowBuffer.prototype.writeDoubleBE = Buffer.prototype.writeDoubleBE;
 },{}]},{},[])
 ;;module.exports=require("buffer-browserify")
 
-},{}],13:[function(require,module,exports){
+},{}],16:[function(require,module,exports){
 (function(Buffer){var util = require('util');
 
 module.exports = clone;
@@ -11276,7 +11338,7 @@ function clone(parent, circular) {
 clone.clonePrototype = require('./clonePrototype.js');
 
 })(require("__browserify_buffer").Buffer)
-},{"util":16,"./clonePrototype.js":19,"__browserify_buffer":18}],15:[function(require,module,exports){
+},{"util":17,"./clonePrototype.js":20,"__browserify_buffer":19}],15:[function(require,module,exports){
 /*
  * Copyright 2009-2011 Mozilla Foundation and contributors
  * Licensed under the New BSD license. See LICENSE.txt or:
@@ -11286,7 +11348,7 @@ exports.SourceMapGenerator = require('./source-map/source-map-generator').Source
 exports.SourceMapConsumer = require('./source-map/source-map-consumer').SourceMapConsumer;
 exports.SourceNode = require('./source-map/source-node').SourceNode;
 
-},{"./source-map/source-map-generator":20,"./source-map/source-map-consumer":21,"./source-map/source-node":22}],23:[function(require,module,exports){
+},{"./source-map/source-map-generator":21,"./source-map/source-map-consumer":22,"./source-map/source-node":23}],24:[function(require,module,exports){
 // shim for using process in browser
 
 var process = module.exports = {};
@@ -11340,7 +11402,7 @@ process.chdir = function (dir) {
     throw new Error('process.chdir is not supported');
 };
 
-},{}],17:[function(require,module,exports){
+},{}],18:[function(require,module,exports){
 (function(process){if (!process.EventEmitter) process.EventEmitter = function () {};
 
 var EventEmitter = exports.EventEmitter = process.EventEmitter;
@@ -11526,7 +11588,7 @@ EventEmitter.prototype.listeners = function(type) {
 };
 
 })(require("__browserify_process"))
-},{"__browserify_process":23}],19:[function(require,module,exports){
+},{"__browserify_process":24}],20:[function(require,module,exports){
 /**
  * Simple flat clone using prototype, accepts only objects, usefull for property
  * override on FLAT configuration object (no nested props).
@@ -11545,7 +11607,7 @@ function clonePrototype(parent) {
 
 module.exports = clonePrototype;
 
-},{}],20:[function(require,module,exports){
+},{}],21:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -11928,7 +11990,7 @@ define(function (require, exports, module) {
 
 });
 
-},{"./base64-vlq":24,"./util":25,"./array-set":26,"amdefine":27}],21:[function(require,module,exports){
+},{"./base64-vlq":25,"./util":26,"./array-set":27,"amdefine":28}],22:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -12356,7 +12418,7 @@ define(function (require, exports, module) {
 
 });
 
-},{"./util":25,"./binary-search":28,"./array-set":26,"./base64-vlq":24,"amdefine":27}],22:[function(require,module,exports){
+},{"./util":26,"./binary-search":29,"./array-set":27,"./base64-vlq":25,"amdefine":28}],23:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -12711,9 +12773,9 @@ define(function (require, exports, module) {
 
 });
 
-},{"./source-map-generator":20,"./util":25,"amdefine":27}],27:[function(require,module,exports){
+},{"./source-map-generator":21,"./util":26,"amdefine":28}],28:[function(require,module,exports){
 (function(process){/** vim: et:ts=4:sw=4:sts=4
- * @license amdefine 0.0.4 Copyright (c) 2011, The Dojo Foundation All Rights Reserved.
+ * @license amdefine 0.0.5 Copyright (c) 2011, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/amdefine for details
  */
@@ -12866,7 +12928,7 @@ function amdefine(module, require) {
                 uri: __filename,
                 exports: e
             };
-            r = makeRequire(undefined, e, m, id);
+            r = makeRequire(require, e, m, id);
         } else {
             //Only support one define call per file
             if (alreadyCalled) {
@@ -13013,7 +13075,7 @@ function amdefine(module, require) {
 module.exports = amdefine;
 
 })(require("__browserify_process"))
-},{"path":29,"__browserify_process":23}],29:[function(require,module,exports){
+},{"path":30,"__browserify_process":24}],30:[function(require,module,exports){
 (function(process){function filter (xs, fn) {
     var res = [];
     for (var i = 0; i < xs.length; i++) {
@@ -13191,7 +13253,7 @@ exports.relative = function(from, to) {
 };
 
 })(require("__browserify_process"))
-},{"__browserify_process":23}],24:[function(require,module,exports){
+},{"__browserify_process":24}],25:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -13337,7 +13399,7 @@ define(function (require, exports, module) {
 
 });
 
-},{"./base64":30,"amdefine":27}],25:[function(require,module,exports){
+},{"./base64":31,"amdefine":28}],26:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -13430,7 +13492,7 @@ define(function (require, exports, module) {
 
 });
 
-},{"amdefine":27}],26:[function(require,module,exports){
+},{"amdefine":28}],27:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -13528,7 +13590,7 @@ define(function (require, exports, module) {
 
 });
 
-},{"./util":25,"amdefine":27}],28:[function(require,module,exports){
+},{"./util":26,"amdefine":28}],29:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -13611,7 +13673,7 @@ define(function (require, exports, module) {
 
 });
 
-},{"amdefine":27}],30:[function(require,module,exports){
+},{"amdefine":28}],31:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -13655,5 +13717,5 @@ define(function (require, exports, module) {
 
 });
 
-},{"amdefine":27}]},{},[1])
+},{"amdefine":28}]},{},[1])
 ;
