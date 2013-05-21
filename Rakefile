@@ -26,7 +26,9 @@ end
   File.open('lib/ngmin/rails/version.rb', 'w') { |f| f.write text }
 end
 
-desc "Build a new version of ngmin-browserified.js"
-task :build do
-  install_ngmin && generate_ngmin && update_version
+namespace :ngmin do
+  desc "Build a new version of ngmin-browserified.js"
+  task :build do
+    install_ngmin && generate_ngmin && update_version
+  end
 end
