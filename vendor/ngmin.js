@@ -927,7 +927,7 @@ parseStatement: true, parseSourceElement: true */
                         str += '\f';
                         break;
                     case 'v':
-                        str += '\v';
+                        str += '\x0B';
                         break;
 
                     default:
@@ -1429,16 +1429,24 @@ parseStatement: true, parseSourceElement: true */
                 expect('(');
                 token = lookahead();
                 if (token.type !== Token.Identifier) {
-                    throwUnexpected(lex());
+                    expect(')');
+                    throwErrorTolerant(token, Messages.UnexpectedToken, token.value);
+                    return {
+                        type: Syntax.Property,
+                        key: key,
+                        value: parsePropertyFunction([]),
+                        kind: 'set'
+                    };
+                } else {
+                    param = [ parseVariableIdentifier() ];
+                    expect(')');
+                    return {
+                        type: Syntax.Property,
+                        key: key,
+                        value: parsePropertyFunction(param, token),
+                        kind: 'set'
+                    };
                 }
-                param = [ parseVariableIdentifier() ];
-                expect(')');
-                return {
-                    type: Syntax.Property,
-                    key: key,
-                    value: parsePropertyFunction(param, token),
-                    kind: 'set'
-                };
             } else {
                 expect(':');
                 return {
@@ -1785,7 +1793,8 @@ parseStatement: true, parseSourceElement: true */
             expr = {
                 type: Syntax.UnaryExpression,
                 operator: lex().value,
-                argument: parseUnaryExpression()
+                argument: parseUnaryExpression(),
+                prefix: true
             };
             return expr;
         }
@@ -1794,7 +1803,8 @@ parseStatement: true, parseSourceElement: true */
             expr = {
                 type: Syntax.UnaryExpression,
                 operator: lex().value,
-                argument: parseUnaryExpression()
+                argument: parseUnaryExpression(),
+                prefix: true
             };
             if (strict && expr.operator === 'delete' && expr.argument.type === Syntax.Identifier) {
                 throwErrorTolerant({}, Messages.StrictDelete);
@@ -2135,13 +2145,13 @@ parseStatement: true, parseSourceElement: true */
     function parseVariableDeclarationList(kind) {
         var list = [];
 
-        while (index < length) {
+        do {
             list.push(parseVariableDeclaration(kind));
             if (!match(',')) {
                 break;
             }
             lex();
-        }
+        } while (index < length);
 
         return list;
     }
@@ -2681,13 +2691,16 @@ parseStatement: true, parseSourceElement: true */
         expectKeyword('catch');
 
         expect('(');
-        if (!match(')')) {
-            param = parseExpression();
-            // 12.14.1
-            if (strict && param.type === Syntax.Identifier && isRestrictedWord(param.name)) {
-                throwErrorTolerant({}, Messages.StrictCatchVariable);
-            }
+        if (match(')')) {
+            throwUnexpected(lookahead());
         }
+
+        param = parseVariableIdentifier();
+        // 12.14.1
+        if (strict && isRestrictedWord(param.name)) {
+            throwErrorTolerant({}, Messages.StrictCatchVariable);
+        }
+
         expect(')');
 
         return {
@@ -3896,7 +3909,7 @@ parseStatement: true, parseSourceElement: true */
     }
 
     // Sync with package.json.
-    exports.version = '1.0.2';
+    exports.version = '1.0.3';
 
     exports.parse = parse;
 
@@ -4145,6 +4158,26 @@ module.exports = [
     },
     "property": {
       "type": "Identifier",
+      "name": "provider"
+    }
+  },
+  "arguments": [
+    {},
+    {
+      "type": "ObjectExpression"
+    }
+  ]
+},
+
+{
+  "type": "CallExpression",
+  "callee": {
+    "type": "MemberExpression",
+    "object": {
+      "ngModule": true
+    },
+    "property": {
+      "type": "Identifier",
       "name": /^(config|run)$/
     }
   },
@@ -4186,7 +4219,7 @@ module.exports = {
 // return an AST chunk representing an annotation array
 var annotateInjectable = module.exports = function (originalFn) {
   // if there's nothing to inject, don't annotate
-  if (originalFn.params.length === 0) {
+  if (!originalFn.params || originalFn.params.length === 0) {
     return originalFn;
   }
 
@@ -6629,7 +6662,7 @@ var markASTModules = module.exports = function (syntax) {
   return changed;
 };
 
-},{"../signatures/module":9,"./deep-apply":6,"../signatures/simple":8,"../signatures/decl":10,"../signatures/assign":11,"clone":16}],13:[function(require,module,exports){
+},{"./deep-apply":6,"../signatures/module":9,"../signatures/simple":8,"../signatures/decl":10,"../signatures/assign":11,"clone":16}],13:[function(require,module,exports){
 /*
  * Checks each property of the standard recursively against the candidate,
  * ignoring additional properties of the candidate.
@@ -11216,7 +11249,9 @@ SlowBuffer.prototype.writeDoubleBE = Buffer.prototype.writeDoubleBE;
 ;;module.exports=require("buffer-browserify")
 
 },{}],16:[function(require,module,exports){
-(function(Buffer){var util = require('util');
+(function(Buffer){"use strict";
+
+var util = require('util');
 
 module.exports = clone;
 
@@ -11240,60 +11275,61 @@ function clone(parent, circular) {
 
   var useBuffer = typeof Buffer != 'undefined';
 
+  var circularParent = {};
+  var circularResolved = {};
+  var circularReplace = [];
+
+  function _clone(parent, context, child, cIndex) {
+    var i; // Use local context within this function
+    // Deep clone all properties of parent into child
+    if (typeof parent == 'object') {
+      if (parent == null)
+        return parent;
+      // Check for circular references
+      for(i in circularParent)
+        if (circularParent[i] === parent) {
+          // We found a circular reference
+          circularReplace.push({'resolveTo': i, 'child': child, 'i': cIndex});
+          return null; //Just return null for now...
+          // we will resolve circular references later
+        }
+
+      // Add to list of all parent objects
+      circularParent[context] = parent;
+      // Now continue cloning...
+      if (util.isArray(parent)) {
+        child = [];
+        for(i in parent)
+          child[i] = _clone(parent[i], context + '[' + i + ']', child, i);
+      }
+      else if (util.isDate(parent))
+        child = new Date(parent.getTime());
+      else if (util.isRegExp(parent))
+        child = new RegExp(parent.source);
+      else if (useBuffer && Buffer.isBuffer(parent))
+      {
+        child = new Buffer(parent.length);
+        parent.copy(child);
+      }
+      else {
+        child = {};
+
+        // Also copy prototype over to new cloned object
+        child.__proto__ = parent.__proto__;
+        for(i in parent)
+          child[i] = _clone(parent[i], context + '[' + i + ']', child, i);
+      }
+
+      // Add to list of all cloned objects
+      circularResolved[context] = child;
+    }
+    else
+      child = parent; //Just a simple shallow copy will do
+    return child;
+  }
+
   var i;
   if (circular) {
-    var circularParent = {};
-    var circularResolved = {};
-    var circularReplace = [];
-    function _clone(parent, context, child, cIndex) {
-      var i; // Use local context within this function
-      // Deep clone all properties of parent into child
-      if (typeof parent == 'object') {
-        if (parent == null)
-          return parent;
-        // Check for circular references
-        for(i in circularParent)
-          if (circularParent[i] === parent) {
-            // We found a circular reference
-            circularReplace.push({'resolveTo': i, 'child': child, 'i': cIndex});
-            return null; //Just return null for now...
-            // we will resolve circular references later
-          }
-
-        // Add to list of all parent objects
-        circularParent[context] = parent;
-        // Now continue cloning...
-        if (util.isArray(parent)) {
-          child = [];
-          for(i in parent)
-            child[i] = _clone(parent[i], context + '[' + i + ']', child, i);
-        }
-        else if (util.isDate(parent))
-          child = new Date(parent.getTime());
-        else if (util.isRegExp(parent))
-          child = new RegExp(parent.source);
-        else if (useBuffer && Buffer.isBuffer(parent))
-        {
-          child = new Buffer(parent.length);
-          parent.copy(child);
-        }
-        else {
-          child = {};
-
-          // Also copy prototype over to new cloned object
-          child.__proto__ = parent.__proto__;
-          for(i in parent)
-            child[i] = _clone(parent[i], context + '[' + i + ']', child, i);
-        }
-
-        // Add to list of all cloned objects
-        circularResolved[context] = child;
-      }
-      else
-        child = parent; //Just a simple shallow copy will do
-      return child;
-    }
-
     var cloned = _clone(parent, '*');
 
     // Now this object has been cloned. Let's check to see if there are any
@@ -11305,8 +11341,7 @@ function clone(parent, circular) {
       }
     }
     return cloned;
-  }
-  else {
+  } else {
     // Deep clone all properties of parent into child
     var child;
     if (typeof parent == 'object') {
@@ -11589,6 +11624,8 @@ EventEmitter.prototype.listeners = function(type) {
 
 })(require("__browserify_process"))
 },{"__browserify_process":24}],20:[function(require,module,exports){
+"use strict";
+
 /**
  * Simple flat clone using prototype, accepts only objects, usefull for property
  * override on FLAT configuration object (no nested props).
