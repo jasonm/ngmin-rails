@@ -21,6 +21,13 @@ Versioning
 
 The ngmin-rails version number mirrors the version number for the version of ngmin that is bundled with it.
 
+Help
+----
+
+  * **Q**: I installed ngmin-rails, but my assets aren't getting processed with ngmin.
+
+    **A:** Remember to delete `tmp/cache/assets` or `touch` all the related asset files so that the cached versions get regenerated. If you've precompiled your assets into `public/assets`, you'll need to re-precompile them.
+
 Hacking
 -------
 
