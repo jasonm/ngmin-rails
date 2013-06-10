@@ -2,21 +2,20 @@
 
 var esprima = require('esprima'),
   escodegen = require('escodegen'),
-  markASTModules = require('./lib/mark-ast-modules'),
-  annotateAST = require('./lib/annotate-ast');
+  astral = require('astral')();
 
-/*
- * Given a JavaScript string, annotate the injectable AngularJS module methods
- */
+// register angular annotator in astral
+require('astral-angular-annotate')(astral);
+
 window.annotate = exports.annotate = function (inputCode) {
-  var syntax = esprima.parse(inputCode, {
+
+  var ast = esprima.parse(inputCode, {
     tolerant: true
   });
 
-  while (markASTModules(syntax)) {}
-  annotateAST(syntax);
+  astral.run(ast);
 
-  var generatedCode = escodegen.generate(syntax, {
+  var generatedCode = escodegen.generate(ast, {
     format: {
       indent: {
         style: '  '
@@ -27,7 +26,7 @@ window.annotate = exports.annotate = function (inputCode) {
   return generatedCode;
 };
 
-},{"./lib/mark-ast-modules":2,"./lib/annotate-ast":3,"esprima":4,"escodegen":5}],4:[function(require,module,exports){
+},{"escodegen":2,"esprima":3,"astral":4,"astral-angular-annotate":5}],3:[function(require,module,exports){
 (function(){/*
   Copyright (C) 2012 Ariya Hidayat <ariya.hidayat@gmail.com>
   Copyright (C) 2012 Mathias Bynens <mathias@qiwi.be>
@@ -3938,307 +3937,30 @@ parseStatement: true, parseSourceElement: true */
 /* vim: set sw=4 ts=4 et tw=80 : */
 
 })()
-},{}],3:[function(require,module,exports){
+},{}],5:[function(require,module,exports){
 
-var deepApply = require('./deep-apply');
-var annotateInjectable = require('./annotate-injectable');
+// expose each individual pass
+var markPass = exports.mark = require('./passes/mark');
+var refPass = exports.ref = require('./passes/ref');
+var annotatorPass = exports.annotator = require('./passes/annotator');
 
+var pdoAnnotatorPass = exports.pdo = require('./passes/pdo');
+var ddoAnnotatorPass = exports.ddo = require('./passes/ddo');
 
-// look for `modRef.fn` in AST
-var signatures = require('../signatures/simple');
-
-
-/*
- * Modifies AST to add annotations to injectable AngularJS module methods
- */
-var annotateAST = module.exports = function (syntax) {
-
-  // rewrite each matching chunk
-  deepApply(syntax, signatures, function (chunk) {
-    var originalFn,
-      newParam,
-      type;
-
-    try {
-      type = chunk.callee.property.name;
-    }
-    catch (e) {}
-
-    var argIndex = 1;
-    if (type === 'config' || type === 'run') {
-      argIndex = 0;
-    }
-
-    if (type === 'constant' || type === 'value') {
-      return;
-    }
-    chunk.arguments[argIndex] = annotateInjectable(chunk.arguments[argIndex]);
+// expose a convenience function to register all of the passes
+module.exports = function (astral) {
+  [
+    markPass,
+    annotatorPass,
+    refPass,
+    pdoAnnotatorPass,
+    ddoAnnotatorPass
+  ].forEach(function (pass) {
+    astral.register(pass);
   });
-
-
-  // DDO annotations
-
-  deepApply(syntax, [{
-    "type": "CallExpression",
-    "callee": {
-      "type": "MemberExpression",
-      "object": {
-        "ngModule": true
-      },
-      "property": {
-        "type": "Identifier",
-        "name": "directive"
-      }
-    }
-  }], function (directiveChunk) {
-    deepApply(directiveChunk, [{
-      "type": "ReturnStatement",
-      "argument": {
-        "type": "ObjectExpression"
-      }
-    }], function (returnChunk) {
-      deepApply(returnChunk, [{
-        "type": "Property",
-        "key": {
-          "type": "Identifier",
-          "name": "controller"
-        },
-        "value": {
-          "type": "FunctionExpression"
-        }
-      }], function (controllerChunk) {
-        controllerChunk.value = annotateInjectable(controllerChunk.value);
-      });
-    });
-  });
-
-  // PDO annotations - defined by object
-
-  deepApply(syntax, [{
-    "type": "CallExpression",
-    "callee": {
-      "type": "MemberExpression",
-      "object": {
-        "ngModule": true
-      },
-      "property": {
-        "type": "Identifier",
-        "name": "provider"
-      }
-    }
-  }], function (providerChunk) {
-    deepApply(providerChunk, [{
-      "type": "ObjectExpression"
-    }], function(objectChunk) {
-      objectChunk.properties.forEach(function(property) {
-        deepApply(property, [{
-          "type": "Property",
-          "key": {
-            "type": "Identifier",
-            "name": "$get"
-          },
-          "value": {
-            "type": "FunctionExpression"
-          }
-        }], function(propertyChunk) {
-          propertyChunk.value = annotateInjectable(propertyChunk.value);
-        });
-      });
-    });
-  });
-
-  // PDO annotations - defined by function
-
-  deepApply(syntax, [{
-    "type": "CallExpression",
-    "callee": {
-      "type": "MemberExpression",
-      "object": {
-        "ngModule": true
-      },
-      "property": {
-        "type": "Identifier",
-        "name": "provider"
-      }
-    }
-  }], function (providerChunk) {
-    deepApply(providerChunk, [{
-      "type": "ExpressionStatement",
-      "expression": {
-        "type": "AssignmentExpression",
-        "left": {
-          "type": "MemberExpression",
-          "object": {
-            "type": "ThisExpression"
-          },
-          "property": {
-            "type": "Identifier",
-            "name": "$get"
-          }
-        },
-        "right": {
-          "type": "FunctionExpression"
-        }
-      }
-    }], function(pdoChunk) {
-      pdoChunk.expression.right = annotateInjectable(pdoChunk.expression.right);
-    });
-  });
-
 };
 
-},{"./deep-apply":6,"./annotate-injectable":7,"../signatures/simple":8}],9:[function(require,module,exports){
-/*
- * Identify AST blocks that refer to an AngularJS module
- */
-module.exports = {
-  "type": "CallExpression",
-  "callee": {
-    "type": "MemberExpression",
-    "object": {
-      "type": "Identifier",
-      "name": "angular"
-    },
-    "property": {
-      "type": "Identifier",
-      "name": "module"
-    }
-  }
-};
-
-},{}],8:[function(require,module,exports){
-
-/*
- * Simple AST structure to match against
- * ex: `angular.module('whatevs').controller( ... )`
- */
-
-module.exports = [
-
-{
-  "type": "CallExpression",
-  "callee": {
-    "type": "MemberExpression",
-    "object": {
-      "ngModule": true
-    },
-    "property": {
-      "type": "Identifier",
-      "name": /^(constant|value)$/
-    }
-  }
-},
-
-{
-  "type": "CallExpression",
-  "callee": {
-    "type": "MemberExpression",
-    "object": {
-      "ngModule": true
-    },
-    "property": {
-      "type": "Identifier",
-      "name": /^(controller|directive|filter|service|factory|decorator|provider)$/
-    }
-  },
-  "arguments": [
-    {},
-    {
-      "type": "FunctionExpression"
-    }
-  ]
-},
-
-{
-  "type": "CallExpression",
-  "callee": {
-    "type": "MemberExpression",
-    "object": {
-      "ngModule": true
-    },
-    "property": {
-      "type": "Identifier",
-      "name": "provider"
-    }
-  },
-  "arguments": [
-    {},
-    {
-      "type": "ObjectExpression"
-    }
-  ]
-},
-
-{
-  "type": "CallExpression",
-  "callee": {
-    "type": "MemberExpression",
-    "object": {
-      "ngModule": true
-    },
-    "property": {
-      "type": "Identifier",
-      "name": /^(config|run)$/
-    }
-  },
-  "arguments": [
-    {
-      "type": "FunctionExpression"
-    }
-  ]
-}
-
-];
-
-},{}],10:[function(require,module,exports){
-module.exports = {
-  "type": "VariableDeclarator",
-  "init": {
-    "ngModule": true
-  }
-};
-
-},{}],11:[function(require,module,exports){
-module.exports = {
-  "type": "ExpressionStatement",
-  "expression": {
-    "type": "AssignmentExpression",
-    "operator": "=",
-    "left": {
-      "type": "Identifier"
-    },
-    "right": {
-      "ngModule": true
-    }
-  }
-};
-
-},{}],7:[function(require,module,exports){
-
-// given an AST chunk for a fn,
-// return an AST chunk representing an annotation array
-var annotateInjectable = module.exports = function (originalFn) {
-  // if there's nothing to inject, don't annotate
-  if (!originalFn.params || originalFn.params.length === 0) {
-    return originalFn;
-  }
-
-  var newParam = {
-    type: 'ArrayExpression',
-    elements: []
-  };
-
-  originalFn.params.forEach(function (param) {
-    newParam.elements.push({
-      "type": "Literal",
-      "value": param.name
-    });
-  });
-  newParam.elements.push(originalFn);
-  return newParam;
-};
-
-},{}],12:[function(require,module,exports){
+},{"./passes/mark":6,"./passes/ref":7,"./passes/pdo":8,"./passes/annotator":9,"./passes/ddo":10}],11:[function(require,module,exports){
 module.exports={
   "name": "escodegen",
   "description": "ECMAScript code generator",
@@ -4290,45 +4012,11 @@ module.exports={
     "build": "(echo '// Generated by browserify'; ./node_modules/.bin/browserify -i source-map tools/entry-point.js) > escodegen.browser.js"
   },
   "readme": "Escodegen ([escodegen](http://github.com/Constellation/escodegen)) is\n[ECMAScript](http://www.ecma-international.org/publications/standards/Ecma-262.htm)\n(also popularly known as [JavaScript](http://en.wikipedia.org/wiki/JavaScript>JavaScript))\ncode generator from [Parser API](https://developer.mozilla.org/en/SpiderMonkey/Parser_API) AST.\nSee [online generator demo](http://constellation.github.com/escodegen/demo/index.html).\n\n\n### Install\n\nEscodegen can be used in a web browser:\n\n    <script src=\"escodegen.browser.js\"></script>\n\nor in a Node.js application via the package manager:\n\n    npm install escodegen\n\n\n### Usage\n\nA simple example: the program\n\n    escodegen.generate({\n        type: 'BinaryExpression',\n        operator: '+',\n        left: { type: 'Literal', value: 40 },\n        right: { type: 'Literal', value: 2 }\n    });\n\nproduces the string `'40 + 2'`\n\nSee the [API page](https://github.com/Constellation/escodegen/wiki/API) for\noptions. To run the tests, execute `npm test` in the root directory.\n\n\n### License\n\n#### Escodegen\n\nCopyright (C) 2012 [Yusuke Suzuki](http://github.com/Constellation)\n (twitter: [@Constellation](http://twitter.com/Constellation)) and other contributors.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions are met:\n\n  * Redistributions of source code must retain the above copyright\n    notice, this list of conditions and the following disclaimer.\n\n  * Redistributions in binary form must reproduce the above copyright\n    notice, this list of conditions and the following disclaimer in the\n    documentation and/or other materials provided with the distribution.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\"\nAND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE\nIMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE\nARE DISCLAIMED. IN NO EVENT SHALL <COPYRIGHT HOLDER> BE LIABLE FOR ANY\nDIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES\n(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;\nLOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND\nON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT\n(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF\nTHIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n\n#### source-map\n\nSourceNodeMocks has a limited interface of mozilla/source-map SourceNode implementations.\n\nCopyright (c) 2009-2011, Mozilla Foundation and contributors\nAll rights reserved.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions are met:\n\n* Redistributions of source code must retain the above copyright notice, this\n  list of conditions and the following disclaimer.\n\n* Redistributions in binary form must reproduce the above copyright notice,\n  this list of conditions and the following disclaimer in the documentation\n  and/or other materials provided with the distribution.\n\n* Neither the names of the Mozilla Foundation nor the names of project\n  contributors may be used to endorse or promote products derived from this\n  software without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" AND\nANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED\nWARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE\nDISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE\nFOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL\nDAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR\nSERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER\nCAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,\nOR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE\nOF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n\n\n### Status\n\n[![Build Status](https://secure.travis-ci.org/Constellation/escodegen.png)](http://travis-ci.org/Constellation/escodegen)\n",
-  "readmeFilename": "README.md",
   "_id": "escodegen@0.0.22",
   "_from": "escodegen@~0.0.15"
 }
 
-},{}],6:[function(require,module,exports){
-/*
- * Checks each property of the standard recursively against the candidate,
- * runs `cb` on all branches that match the standard
- */
-
-var deepCompare = require('./deep-compare.js');
-
-var deepApply = module.exports = function (candidate, standards, cb) {
-  // depth-first
-  for (var prop in candidate) {
-    if (candidate.hasOwnProperty(prop)) {
-
-      // array
-      if (candidate[prop] instanceof Array) {
-        for (var i = 0; i < candidate[prop].length; i += 1) {
-          deepApply(candidate[prop][i], standards, cb);
-        }
-
-      // object
-      } else if (typeof candidate[prop] === 'object') {
-        deepApply(candidate[prop], standards, cb);
-      }
-    }
-  }
-
-  standards.forEach(function (standard) {
-    if (deepCompare(candidate, standard)) {
-      cb(candidate);
-    }
-  });
-};
-
-},{"./deep-compare.js":13}],5:[function(require,module,exports){
+},{}],2:[function(require,module,exports){
 (function(global){/*
   Copyright (C) 2012 Michael Ficarra <escodegen.copyright@michael.ficarra.me>
   Copyright (C) 2012 Robert Gust-Bardon <donate@robert.gust-bardon.org>
@@ -6588,131 +6276,7 @@ var deepApply = module.exports = function (candidate, standards, cb) {
 /* vim: set sw=4 ts=4 et tw=80 : */
 
 })(window)
-},{"./package.json":12,"estraverse":14,"source-map":15}],2:[function(require,module,exports){
-
-/*
- * Add {"ngModule": true} property to matching modules
- */
-
-var deepApply = require('./deep-apply');
-
-var signatures = [
-  require('../signatures/module')
-].concat(require('../signatures/simple'));
-
-var standards = [
-  require('../signatures/decl'),
-  require('../signatures/assign')
-];
-
-var clone = require('clone');
-
-var simpleSignatures = clone(require('../signatures/simple'));
-
-//TODO: honor scope
-// returns true iff there were things to annotate
-var markASTModules = module.exports = function (syntax) {
-  var changed = false;
-
-
-  deepApply(syntax, signatures, function (chunk) {
-    chunk.ngModule = true;
-    if (!chunk.ngModule) {
-      changed = true;
-    }
-  });
-
-  // module ref ids
-  var modules = [];
-
-  // grab all module ref ids
-  standards.forEach(function (standard) {
-    deepApply(syntax, standards, function (branch) {
-      var id;
-
-      try {
-        id = branch.id.name;
-      } catch (e) {
-        id = branch.expression.left.name;
-      }
-
-      if (modules.indexOf(id) === -1) {
-        modules.push(id);
-      }
-    });
-  });
-
-  var namedModuleMemberExpression = {
-    "type": "Identifier",
-    "name": new RegExp('^(' + modules.join('|') + ')$')
-  };
-
-  simpleSignatures = simpleSignatures.map(function (signature) {
-    signature.callee.object = namedModuleMemberExpression;
-    return signature;
-  });
-
-  deepApply(syntax, simpleSignatures, function (chunk) {
-    if (!chunk.callee.object.ngModule) {
-      changed = true;
-      chunk.callee.object.ngModule = true;
-    }
-  });
-
-  return changed;
-};
-
-},{"./deep-apply":6,"../signatures/module":9,"../signatures/simple":8,"../signatures/decl":10,"../signatures/assign":11,"clone":16}],13:[function(require,module,exports){
-/*
- * Checks each property of the standard recursively against the candidate,
- * ignoring additional properties of the candidate.
- * Returns true iff the candidate matches each of the standard's
- * properties
- */
-
-var deepCompare = module.exports = function (candidate, standard) {
-  if (!standard && !candidate) {
-    return true;
-  } else if (standard && !candidate) {
-    return false;
-  }
-  for (var prop in standard) {
-    if (standard.hasOwnProperty(prop)) {
-
-      // undefinded case
-      if (!candidate[prop]) {
-        return false;
-
-      // regex
-      } else if (standard[prop] instanceof RegExp) {
-        if (!standard[prop].test(candidate[prop])) {
-          return false;
-        }
-
-      // array
-      } else if (standard[prop] instanceof Array) {
-        for (var i = 0; i < standard[prop].length; i += 1) {
-          if (!deepCompare(candidate[prop][i], standard[prop][i])) {
-            return false;
-          }
-        }
-
-      // object
-      } else if (typeof standard[prop] === 'object') {
-        if (!deepCompare(candidate[prop], standard[prop])) {
-          return false;
-        }
-
-      // primative case
-      } else if (candidate[prop] !== standard[prop]) {
-        return false;
-      }
-    }
-  }
-  return true;
-};
-
-},{}],14:[function(require,module,exports){
+},{"./package.json":11,"source-map":12,"estraverse":13}],13:[function(require,module,exports){
 (function(){/*
   Copyright (C) 2012 Yusuke Suzuki <utatane.tea@gmail.com>
   Copyright (C) 2012 Ariya Hidayat <ariya.hidayat@gmail.com>
@@ -7030,360 +6594,238 @@ var deepCompare = module.exports = function (candidate, standard) {
 /* vim: set sw=4 ts=4 et tw=80 : */
 
 })()
-},{}],17:[function(require,module,exports){
-var events = require('events');
+},{}],4:[function(require,module,exports){
 
-exports.isArray = isArray;
-exports.isDate = function(obj){return Object.prototype.toString.call(obj) === '[object Date]'};
-exports.isRegExp = function(obj){return Object.prototype.toString.call(obj) === '[object RegExp]'};
+var clone = require('clone');
+
+var Astral = function () {
+  this._passes = {};
+  this._info = {};
+};
+
+Astral.prototype.register = function (pass) {
+  if (!pass.name) {
+    throw new Error("Expected '" + pass.name + "' pass to have a name");
+  }
+  if (!pass.run) {
+    throw new Error("Expected '" + pass.name + "' pass to have a 'run' method");
+  }
+  if (!pass.prereqs || !(pass.prereqs instanceof Array)) {
+    throw new Error("Expected '" + pass.name + "' pass to have a 'prereqs' Array");
+  }
+  this._passes[pass.name] = pass;
+};
+
+// modifies the original AST
+Astral.prototype.run = function (ast) {
+
+  this._order().forEach(function (pass) {
+    this._info[pass.name] = pass.run(ast, clone(this._info));
+  }, this);
+
+  return ast;
+};
 
 
-exports.print = function () {};
-exports.puts = function () {};
-exports.debug = function() {};
+// returns the passes in order based on prereqs
+Astral.prototype._order = function (ast) {
 
-exports.inspect = function(obj, showHidden, depth, colors) {
-  var seen = [];
+  var passes = this._passes;
 
-  var stylize = function(str, styleType) {
-    // http://en.wikipedia.org/wiki/ANSI_escape_code#graphics
-    var styles =
-        { 'bold' : [1, 22],
-          'italic' : [3, 23],
-          'underline' : [4, 24],
-          'inverse' : [7, 27],
-          'white' : [37, 39],
-          'grey' : [90, 39],
-          'black' : [30, 39],
-          'blue' : [34, 39],
-          'cyan' : [36, 39],
-          'green' : [32, 39],
-          'magenta' : [35, 39],
-          'red' : [31, 39],
-          'yellow' : [33, 39] };
+  var order = [];
 
-    var style =
-        { 'special': 'cyan',
-          'number': 'blue',
-          'boolean': 'yellow',
-          'undefined': 'grey',
-          'null': 'bold',
-          'string': 'green',
-          'date': 'magenta',
-          // "name": intentionally not styling
-          'regexp': 'red' }[styleType];
+  var toOrder = Object.keys(passes).map(function (name) {
+    return passes[name];
+  }, this);
 
-    if (style) {
-      return '\033[' + styles[style][0] + 'm' + str +
-             '\033[' + styles[style][1] + 'm';
-    } else {
-      return str;
+  var progress = false;
+
+  do {
+    var add = toOrder.filter(function (pass) {
+      return !pass.prereqs.
+        map(function (prereq) {
+          return passes[prereq];
+        }).
+        filter(function (prereq) {
+          return prereq;
+        }).
+        some(function (prereq) {
+          return order.indexOf(prereq) === -1;
+        });
+    });
+    if (add.length > 0) {
+      progress = true;
+      
+      order = order.concat(add);
+      add.forEach(function (a) {
+        toOrder.splice(toOrder.indexOf(a), 1);
+      });
     }
-  };
-  if (! colors) {
-    stylize = function(str, styleType) { return str; };
+  } while (toOrder.length > 0 && progress);
+
+
+  if (toOrder > 0) {
+    return new Error("Unable to order " + toOrder.toString());
   }
 
-  function format(value, recurseTimes) {
-    // Provide a hook for user-specified inspect functions.
-    // Check that value is an object with an inspect function on it
-    if (value && typeof value.inspect === 'function' &&
-        // Filter out the util module, it's inspect function is special
-        value !== exports &&
-        // Also filter out any prototype objects using the circular check.
-        !(value.constructor && value.constructor.prototype === value)) {
-      return value.inspect(recurseTimes);
-    }
+  return order;
+};
 
-    // Primitive types cannot have properties
-    switch (typeof value) {
-      case 'undefined':
-        return stylize('undefined', 'undefined');
+module.exports = function () {
+  return new Astral();
+};
 
-      case 'string':
-        var simple = '\'' + JSON.stringify(value).replace(/^"|"$/g, '')
-                                                 .replace(/'/g, "\\'")
-                                                 .replace(/\\"/g, '"') + '\'';
-        return stylize(simple, 'string');
+},{"clone":14}],8:[function(require,module,exports){
 
-      case 'number':
-        return stylize('' + value, 'number');
+var annotateInjectable = require('../lib/annotate-injectable');
+var deepApply = require('../lib/deep-apply');
 
-      case 'boolean':
-        return stylize('' + value, 'boolean');
-    }
-    // For some reason typeof null is "object", so special case here.
-    if (value === null) {
-      return stylize('null', 'null');
-    }
+// mark provider description objects
+var pdoAnnotatorPass = {};
+pdoAnnotatorPass.name = 'angular:annotator:pdo';
+pdoAnnotatorPass.prereqs = [
+  'angular:annotator:mark'
+];
 
-    // Look up the keys of the object.
-    var visible_keys = Object_keys(value);
-    var keys = showHidden ? Object_getOwnPropertyNames(value) : visible_keys;
+pdoAnnotatorPass.run = function (ast, info) {
 
-    // Functions without properties can be shortcutted.
-    if (typeof value === 'function' && keys.length === 0) {
-      if (isRegExp(value)) {
-        return stylize('' + value, 'regexp');
-      } else {
-        var name = value.name ? ': ' + value.name : '';
-        return stylize('[Function' + name + ']', 'special');
+  deepApply(ast, [{
+    "type": "CallExpression",
+    "callee": {
+      "type": "MemberExpression",
+      "object": {
+        "ngModule": true
+      },
+      "property": {
+        "type": "Identifier",
+        "name": "provider"
       }
     }
+  }], function (providerChunk) {
 
-    // Dates without properties can be shortcutted
-    if (isDate(value) && keys.length === 0) {
-      return stylize(value.toUTCString(), 'date');
-    }
+    // PDO annotations - defined by function
 
-    var base, type, braces;
-    // Determine the object type
-    if (isArray(value)) {
-      type = 'Array';
-      braces = ['[', ']'];
-    } else {
-      type = 'Object';
-      braces = ['{', '}'];
-    }
-
-    // Make functions say that they are functions
-    if (typeof value === 'function') {
-      var n = value.name ? ': ' + value.name : '';
-      base = (isRegExp(value)) ? ' ' + value : ' [Function' + n + ']';
-    } else {
-      base = '';
-    }
-
-    // Make dates with properties first say the date
-    if (isDate(value)) {
-      base = ' ' + value.toUTCString();
-    }
-
-    if (keys.length === 0) {
-      return braces[0] + base + braces[1];
-    }
-
-    if (recurseTimes < 0) {
-      if (isRegExp(value)) {
-        return stylize('' + value, 'regexp');
-      } else {
-        return stylize('[Object]', 'special');
-      }
-    }
-
-    seen.push(value);
-
-    var output = keys.map(function(key) {
-      var name, str;
-      if (value.__lookupGetter__) {
-        if (value.__lookupGetter__(key)) {
-          if (value.__lookupSetter__(key)) {
-            str = stylize('[Getter/Setter]', 'special');
-          } else {
-            str = stylize('[Getter]', 'special');
+    deepApply(providerChunk, [{
+      "type": "ExpressionStatement",
+      "expression": {
+        "type": "AssignmentExpression",
+        "left": {
+          "type": "MemberExpression",
+          "object": {
+            "type": "ThisExpression"
+          },
+          "property": {
+            "type": "Identifier",
+            "name": "$get"
           }
-        } else {
-          if (value.__lookupSetter__(key)) {
-            str = stylize('[Setter]', 'special');
-          }
+        },
+        "right": {
+          "type": "FunctionExpression"
         }
       }
-      if (visible_keys.indexOf(key) < 0) {
-        name = '[' + key + ']';
-      }
-      if (!str) {
-        if (seen.indexOf(value[key]) < 0) {
-          if (recurseTimes === null) {
-            str = format(value[key]);
-          } else {
-            str = format(value[key], recurseTimes - 1);
-          }
-          if (str.indexOf('\n') > -1) {
-            if (isArray(value)) {
-              str = str.split('\n').map(function(line) {
-                return '  ' + line;
-              }).join('\n').substr(2);
-            } else {
-              str = '\n' + str.split('\n').map(function(line) {
-                return '   ' + line;
-              }).join('\n');
-            }
-          }
-        } else {
-          str = stylize('[Circular]', 'special');
-        }
-      }
-      if (typeof name === 'undefined') {
-        if (type === 'Array' && key.match(/^\d+$/)) {
-          return str;
-        }
-        name = JSON.stringify('' + key);
-        if (name.match(/^"([a-zA-Z_][a-zA-Z_0-9]*)"$/)) {
-          name = name.substr(1, name.length - 2);
-          name = stylize(name, 'name');
-        } else {
-          name = name.replace(/'/g, "\\'")
-                     .replace(/\\"/g, '"')
-                     .replace(/(^"|"$)/g, "'");
-          name = stylize(name, 'string');
-        }
-      }
-
-      return name + ': ' + str;
+    }], function (pdoChunk) {
+      pdoChunk.expression.right = annotateInjectable(pdoChunk.expression.right);
     });
 
-    seen.pop();
+    // PDO annotations defined by object
 
-    var numLinesEst = 0;
-    var length = output.reduce(function(prev, cur) {
-      numLinesEst++;
-      if (cur.indexOf('\n') >= 0) numLinesEst++;
-      return prev + cur.length + 1;
-    }, 0);
-
-    if (length > 50) {
-      output = braces[0] +
-               (base === '' ? '' : base + '\n ') +
-               ' ' +
-               output.join(',\n  ') +
-               ' ' +
-               braces[1];
-
-    } else {
-      output = braces[0] + base + ' ' + output.join(', ') + ' ' + braces[1];
-    }
-
-    return output;
-  }
-  return format(obj, (typeof depth === 'undefined' ? 2 : depth));
+    deepApply(providerChunk, [{
+      "type": "ObjectExpression"
+    }], function(objectChunk) {
+      objectChunk.properties.forEach(function (property) {
+        deepApply(property, [{
+          "type": "Property",
+          "key": {
+            "type": "Identifier",
+            "name": "$get"
+          },
+          "value": {
+            "type": "FunctionExpression"
+          }
+        }], function (propertyChunk) {
+          propertyChunk.value = annotateInjectable(propertyChunk.value);
+        });
+      });
+    });
+  });
 };
 
+module.exports = pdoAnnotatorPass;
 
-function isArray(ar) {
-  return ar instanceof Array ||
-         Array.isArray(ar) ||
-         (ar && ar !== Object.prototype && isArray(ar.__proto__));
-}
+},{"../lib/annotate-injectable":15,"../lib/deep-apply":16}],10:[function(require,module,exports){
+// mark directive description objects
 
+var annotateInjectable = require('../lib/annotate-injectable');
+var deepApply = require('../lib/deep-apply');
 
-function isRegExp(re) {
-  return re instanceof RegExp ||
-    (typeof re === 'object' && Object.prototype.toString.call(re) === '[object RegExp]');
-}
+var ddoAnnotatorPass = module.exports = {};
+ddoAnnotatorPass.name = 'angular:annotator:ddo';
+ddoAnnotatorPass.prereqs = [
+  'angular:annotator:mark'
+];
 
-
-function isDate(d) {
-  if (d instanceof Date) return true;
-  if (typeof d !== 'object') return false;
-  var properties = Date.prototype && Object_getOwnPropertyNames(Date.prototype);
-  var proto = d.__proto__ && Object_getOwnPropertyNames(d.__proto__);
-  return JSON.stringify(proto) === JSON.stringify(properties);
-}
-
-function pad(n) {
-  return n < 10 ? '0' + n.toString(10) : n.toString(10);
-}
-
-var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep',
-              'Oct', 'Nov', 'Dec'];
-
-// 26 Feb 16:19:34
-function timestamp() {
-  var d = new Date();
-  var time = [pad(d.getHours()),
-              pad(d.getMinutes()),
-              pad(d.getSeconds())].join(':');
-  return [d.getDate(), months[d.getMonth()], time].join(' ');
-}
-
-exports.log = function (msg) {};
-
-exports.pump = null;
-
-var Object_keys = Object.keys || function (obj) {
-    var res = [];
-    for (var key in obj) res.push(key);
-    return res;
-};
-
-var Object_getOwnPropertyNames = Object.getOwnPropertyNames || function (obj) {
-    var res = [];
-    for (var key in obj) {
-        if (Object.hasOwnProperty.call(obj, key)) res.push(key);
+ddoAnnotatorPass.run = function (ast, info) {
+  deepApply(ast, [{
+    "type": "CallExpression",
+    "callee": {
+      "type": "MemberExpression",
+      "object": {
+        "ngModule": true
+      },
+      "property": {
+        "type": "Identifier",
+        "name": "directive"
+      }
     }
-    return res;
-};
-
-var Object_create = Object.create || function (prototype, properties) {
-    // from es5-shim
-    var object;
-    if (prototype === null) {
-        object = { '__proto__' : null };
-    }
-    else {
-        if (typeof prototype !== 'object') {
-            throw new TypeError(
-                'typeof prototype[' + (typeof prototype) + '] != \'object\''
-            );
+  }], function (directiveChunk) {
+    deepApply(directiveChunk, [{
+      "type": "ReturnStatement",
+      "argument": {
+        "type": "ObjectExpression"
+      }
+    }], function (returnChunk) {
+      deepApply(returnChunk, [{
+        "type": "Property",
+        "key": {
+          "type": "Identifier",
+          "name": "controller"
+        },
+        "value": {
+          "type": "FunctionExpression"
         }
-        var Type = function () {};
-        Type.prototype = prototype;
-        object = new Type();
-        object.__proto__ = prototype;
-    }
-    if (typeof properties !== 'undefined' && Object.defineProperties) {
-        Object.defineProperties(object, properties);
-    }
-    return object;
-};
-
-exports.inherits = function(ctor, superCtor) {
-  ctor.super_ = superCtor;
-  ctor.prototype = Object_create(superCtor.prototype, {
-    constructor: {
-      value: ctor,
-      enumerable: false,
-      writable: true,
-      configurable: true
-    }
+      }], function (controllerChunk) {
+        controllerChunk.value = annotateInjectable(controllerChunk.value);
+      });
+    });
   });
 };
 
-var formatRegExp = /%[sdj%]/g;
-exports.format = function(f) {
-  if (typeof f !== 'string') {
-    var objects = [];
-    for (var i = 0; i < arguments.length; i++) {
-      objects.push(exports.inspect(arguments[i]));
-    }
-    return objects.join(' ');
+},{"../lib/annotate-injectable":15,"../lib/deep-apply":16}],15:[function(require,module,exports){
+
+// given an AST chunk for a fn,
+// return an AST chunk representing an annotation array
+var annotateInjectable = module.exports = function (originalFn) {
+  // if there's nothing to inject, don't annotate
+  if (!originalFn.params || originalFn.params.length === 0) {
+    return originalFn;
   }
 
-  var i = 1;
-  var args = arguments;
-  var len = args.length;
-  var str = String(f).replace(formatRegExp, function(x) {
-    if (x === '%%') return '%';
-    if (i >= len) return x;
-    switch (x) {
-      case '%s': return String(args[i++]);
-      case '%d': return Number(args[i++]);
-      case '%j': return JSON.stringify(args[i++]);
-      default:
-        return x;
-    }
+  var newParam = {
+    type: 'ArrayExpression',
+    elements: []
+  };
+
+  originalFn.params.forEach(function (param) {
+    newParam.elements.push({
+      "type": "Literal",
+      "value": param.name
+    });
   });
-  for(var x = args[i]; i < len; x = args[++i]){
-    if (x === null || typeof x !== 'object') {
-      str += ' ' + x;
-    } else {
-      str += ' ' + exports.inspect(x);
-    }
-  }
-  return str;
+  newParam.elements.push(originalFn);
+  return newParam;
 };
 
-},{"events":18}],19:[function(require,module,exports){
+},{}],17:[function(require,module,exports){
 require=(function(e,t,n,r){function i(r){if(!n[r]){if(!t[r]){if(e)return e(r);throw new Error("Cannot find module '"+r+"'")}var s=n[r]={exports:{}};t[r][0](function(e){var n=t[r][1][e];return i(n?n:e)},s,s.exports)}return n[r].exports}for(var s=0;s<r.length;s++)i(r[s]);return i})(typeof require!=="undefined"&&require,{1:[function(require,module,exports){
 exports.readIEEE754 = function(buffer, offset, isBE, mLen, nBytes) {
   var e, m,
@@ -11248,10 +10690,23 @@ SlowBuffer.prototype.writeDoubleBE = Buffer.prototype.writeDoubleBE;
 },{}]},{},[])
 ;;module.exports=require("buffer-browserify")
 
-},{}],16:[function(require,module,exports){
+},{}],14:[function(require,module,exports){
 (function(Buffer){"use strict";
+function objectToString(o) {
+  return Object.prototype.toString.call(o);
+}
 
-var util = require('util');
+var util = {
+  isArray: function (ar) {
+    return Array.isArray(ar) || (typeof ar === 'object' && objectToString(ar) === '[object Array]');
+  },
+  isDate: function (d) {
+    return typeof d === 'object' && objectToString(d) === '[object Date]';
+  },
+  isRegExp: function (re) {
+    return typeof re === 'object' && objectToString(re) === '[object RegExp]';
+  }
+};
 
 module.exports = clone;
 
@@ -11369,11 +10824,150 @@ function clone(parent, circular) {
   }
 }
 
-// see: clonePrototype.js
-clone.clonePrototype = require('./clonePrototype.js');
+/**
+ * Simple flat clone using prototype, accepts only objects, usefull for property
+ * override on FLAT configuration object (no nested props).
+ *
+ * USE WITH CAUTION! This may not behave as you wish if you do not know how this
+ * works.
+ */
+clone.clonePrototype = function(parent) {
+  if (parent === null)
+    return null;
+
+  var c = function () {};
+  c.prototype = parent;
+  return new c();
+};
 
 })(require("__browserify_buffer").Buffer)
-},{"util":17,"./clonePrototype.js":20,"__browserify_buffer":19}],15:[function(require,module,exports){
+},{"__browserify_buffer":17}],18:[function(require,module,exports){
+/*
+ * Identify AST blocks that refer to an AngularJS module
+ */
+module.exports = {
+  "type": "CallExpression",
+  "callee": {
+    "type": "MemberExpression",
+    "object": {
+      "type": "Identifier",
+      "name": "angular"
+    },
+    "property": {
+      "type": "Identifier",
+      "name": "module"
+    }
+  }
+};
+
+},{}],19:[function(require,module,exports){
+
+/*
+ * Simple AST structure to match against
+ * ex: `angular.module('whatevs').controller( ... )`
+ */
+
+module.exports = [
+
+{
+  "type": "CallExpression",
+  "callee": {
+    "type": "MemberExpression",
+    "object": {
+      "ngModule": true
+    },
+    "property": {
+      "type": "Identifier",
+      "name": /^(constant|value)$/
+    }
+  }
+},
+
+{
+  "type": "CallExpression",
+  "callee": {
+    "type": "MemberExpression",
+    "object": {
+      "ngModule": true
+    },
+    "property": {
+      "type": "Identifier",
+      "name": /^(controller|directive|filter|service|factory|decorator|provider)$/
+    }
+  },
+  "arguments": [
+    {},
+    {
+      "type": "FunctionExpression"
+    }
+  ]
+},
+
+{
+  "type": "CallExpression",
+  "callee": {
+    "type": "MemberExpression",
+    "object": {
+      "ngModule": true
+    },
+    "property": {
+      "type": "Identifier",
+      "name": "provider"
+    }
+  },
+  "arguments": [
+    {},
+    {
+      "type": "ObjectExpression"
+    }
+  ]
+},
+
+{
+  "type": "CallExpression",
+  "callee": {
+    "type": "MemberExpression",
+    "object": {
+      "ngModule": true
+    },
+    "property": {
+      "type": "Identifier",
+      "name": /^(config|run)$/
+    }
+  },
+  "arguments": [
+    {
+      "type": "FunctionExpression"
+    }
+  ]
+}
+
+];
+
+},{}],20:[function(require,module,exports){
+module.exports = {
+  "type": "ExpressionStatement",
+  "expression": {
+    "type": "AssignmentExpression",
+    "operator": "=",
+    "left": {
+      "type": "Identifier"
+    },
+    "right": {
+      "ngModule": true
+    }
+  }
+};
+
+},{}],21:[function(require,module,exports){
+module.exports = {
+  "type": "VariableDeclarator",
+  "init": {
+    "ngModule": true
+  }
+};
+
+},{}],12:[function(require,module,exports){
 /*
  * Copyright 2009-2011 Mozilla Foundation and contributors
  * Licensed under the New BSD license. See LICENSE.txt or:
@@ -11383,268 +10977,374 @@ exports.SourceMapGenerator = require('./source-map/source-map-generator').Source
 exports.SourceMapConsumer = require('./source-map/source-map-consumer').SourceMapConsumer;
 exports.SourceNode = require('./source-map/source-node').SourceNode;
 
-},{"./source-map/source-map-generator":21,"./source-map/source-map-consumer":22,"./source-map/source-node":23}],24:[function(require,module,exports){
-// shim for using process in browser
+},{"./source-map/source-map-generator":22,"./source-map/source-map-consumer":23,"./source-map/source-node":24}],16:[function(require,module,exports){
+/*
+ * Checks each property of the standard recursively against the candidate,
+ * runs `cb` on all branches that match the standard
+ */
 
-var process = module.exports = {};
+var deepCompare = require('./deep-compare.js');
 
-process.nextTick = (function () {
-    var canSetImmediate = typeof window !== 'undefined'
-    && window.setImmediate;
-    var canPost = typeof window !== 'undefined'
-    && window.postMessage && window.addEventListener
-    ;
+var deepApply = module.exports = function (candidate, standards, cb) {
+  // depth-first
+  for (var prop in candidate) {
+    if (candidate.hasOwnProperty(prop)) {
 
-    if (canSetImmediate) {
-        return function (f) { return window.setImmediate(f) };
-    }
+      // array
+      if (candidate[prop] instanceof Array) {
+        for (var i = 0; i < candidate[prop].length; i += 1) {
+          deepApply(candidate[prop][i], standards, cb);
+        }
 
-    if (canPost) {
-        var queue = [];
-        window.addEventListener('message', function (ev) {
-            if (ev.source === window && ev.data === 'process-tick') {
-                ev.stopPropagation();
-                if (queue.length > 0) {
-                    var fn = queue.shift();
-                    fn();
-                }
-            }
-        }, true);
-
-        return function nextTick(fn) {
-            queue.push(fn);
-            window.postMessage('process-tick', '*');
-        };
-    }
-
-    return function nextTick(fn) {
-        setTimeout(fn, 0);
-    };
-})();
-
-process.title = 'browser';
-process.browser = true;
-process.env = {};
-process.argv = [];
-
-process.binding = function (name) {
-    throw new Error('process.binding is not supported');
-}
-
-// TODO(shtylman)
-process.cwd = function () { return '/' };
-process.chdir = function (dir) {
-    throw new Error('process.chdir is not supported');
-};
-
-},{}],18:[function(require,module,exports){
-(function(process){if (!process.EventEmitter) process.EventEmitter = function () {};
-
-var EventEmitter = exports.EventEmitter = process.EventEmitter;
-var isArray = typeof Array.isArray === 'function'
-    ? Array.isArray
-    : function (xs) {
-        return Object.prototype.toString.call(xs) === '[object Array]'
-    }
-;
-function indexOf (xs, x) {
-    if (xs.indexOf) return xs.indexOf(x);
-    for (var i = 0; i < xs.length; i++) {
-        if (x === xs[i]) return i;
-    }
-    return -1;
-}
-
-// By default EventEmitters will print a warning if more than
-// 10 listeners are added to it. This is a useful default which
-// helps finding memory leaks.
-//
-// Obviously not all Emitters should be limited to 10. This function allows
-// that to be increased. Set to zero for unlimited.
-var defaultMaxListeners = 10;
-EventEmitter.prototype.setMaxListeners = function(n) {
-  if (!this._events) this._events = {};
-  this._events.maxListeners = n;
-};
-
-
-EventEmitter.prototype.emit = function(type) {
-  // If there is no 'error' event listener then throw.
-  if (type === 'error') {
-    if (!this._events || !this._events.error ||
-        (isArray(this._events.error) && !this._events.error.length))
-    {
-      if (arguments[1] instanceof Error) {
-        throw arguments[1]; // Unhandled 'error' event
-      } else {
-        throw new Error("Uncaught, unspecified 'error' event.");
-      }
-      return false;
-    }
-  }
-
-  if (!this._events) return false;
-  var handler = this._events[type];
-  if (!handler) return false;
-
-  if (typeof handler == 'function') {
-    switch (arguments.length) {
-      // fast cases
-      case 1:
-        handler.call(this);
-        break;
-      case 2:
-        handler.call(this, arguments[1]);
-        break;
-      case 3:
-        handler.call(this, arguments[1], arguments[2]);
-        break;
-      // slower
-      default:
-        var args = Array.prototype.slice.call(arguments, 1);
-        handler.apply(this, args);
-    }
-    return true;
-
-  } else if (isArray(handler)) {
-    var args = Array.prototype.slice.call(arguments, 1);
-
-    var listeners = handler.slice();
-    for (var i = 0, l = listeners.length; i < l; i++) {
-      listeners[i].apply(this, args);
-    }
-    return true;
-
-  } else {
-    return false;
-  }
-};
-
-// EventEmitter is defined in src/node_events.cc
-// EventEmitter.prototype.emit() is also defined there.
-EventEmitter.prototype.addListener = function(type, listener) {
-  if ('function' !== typeof listener) {
-    throw new Error('addListener only takes instances of Function');
-  }
-
-  if (!this._events) this._events = {};
-
-  // To avoid recursion in the case that type == "newListeners"! Before
-  // adding it to the listeners, first emit "newListeners".
-  this.emit('newListener', type, listener);
-
-  if (!this._events[type]) {
-    // Optimize the case of one listener. Don't need the extra array object.
-    this._events[type] = listener;
-  } else if (isArray(this._events[type])) {
-
-    // Check for listener leak
-    if (!this._events[type].warned) {
-      var m;
-      if (this._events.maxListeners !== undefined) {
-        m = this._events.maxListeners;
-      } else {
-        m = defaultMaxListeners;
-      }
-
-      if (m && m > 0 && this._events[type].length > m) {
-        this._events[type].warned = true;
-        console.error('(node) warning: possible EventEmitter memory ' +
-                      'leak detected. %d listeners added. ' +
-                      'Use emitter.setMaxListeners() to increase limit.',
-                      this._events[type].length);
-        console.trace();
+      // object
+      } else if (typeof candidate[prop] === 'object') {
+        deepApply(candidate[prop], standards, cb);
       }
     }
-
-    // If we've already got an array, just append.
-    this._events[type].push(listener);
-  } else {
-    // Adding the second element, need to change to array.
-    this._events[type] = [this._events[type], listener];
   }
 
-  return this;
+  standards.forEach(function (standard) {
+    if (deepCompare(candidate, standard)) {
+      cb(candidate);
+    }
+  });
 };
 
-EventEmitter.prototype.on = EventEmitter.prototype.addListener;
+},{"./deep-compare.js":25}],9:[function(require,module,exports){
+// annotate "ngModule"
 
-EventEmitter.prototype.once = function(type, listener) {
-  var self = this;
-  self.on(type, function g() {
-    self.removeListener(type, g);
-    listener.apply(this, arguments);
+var annotateInjectable = require('../lib/annotate-injectable');
+var annotatorPass = module.exports = require('astral-pass')();
+
+annotatorPass.name = 'angular:annotator';
+annotatorPass.prereqs = [
+  'angular:annotator:mark'
+];
+
+annotatorPass.
+  when(require('../signatures/simple')).
+  do(function (chunk, info) {
+    var type;
+
+    if (chunk.callee &&
+      chunk.callee.property &&
+      chunk.callee.property.name) {
+      type = chunk.callee.property.name;
+    }
+
+    var argIndex = 1;
+    if (type === 'config' || type === 'run') {
+      argIndex = 0;
+    }
+
+    if (type === 'constant' || type === 'value') {
+      return;
+    }
+    chunk.arguments[argIndex] = annotateInjectable(chunk.arguments[argIndex]);
   });
 
-  return this;
+},{"../lib/annotate-injectable":15,"../signatures/simple":19,"astral-pass":26}],7:[function(require,module,exports){
+// mark calls off of referenced 'ngModule's
+
+var refPass = module.exports = require('astral-pass')();
+
+refPass.name = 'angular:annotator:ref';
+refPass.prereqs = [
+  'angular:annotator:mark'
+];
+
+refPass.
+  when(require('../signatures/assign')).
+  when(require('../signatures/decl')).
+  do(function (chunk, info) {
+    info = info[refPass.name];
+
+    if (!info.modules) {
+      info.modules = [];
+    }
+    
+    var id = chunk.id ?
+      chunk.id.name :
+      chunk.expression.left.name;
+
+    if (info.modules.indexOf(id) === -1) {
+      info.modules.push(id);
+    }
+
+    return info;
+  });
+
+},{"../signatures/assign":20,"../signatures/decl":21,"astral-pass":26}],25:[function(require,module,exports){
+/*
+ * Checks each property of the standard recursively against the candidate,
+ * ignoring additional properties of the candidate.
+ * Returns true iff the candidate matches each of the standard's
+ * properties
+ */
+
+var deepCompare = module.exports = function (candidate, standard) {
+  if (!standard && !candidate) {
+    return true;
+  } else if (standard && !candidate) {
+    return false;
+  }
+  for (var prop in standard) {
+    if (standard.hasOwnProperty(prop)) {
+
+      // undefinded case
+      if (!candidate[prop]) {
+        return false;
+
+      // regex
+      } else if (standard[prop] instanceof RegExp) {
+        if (!standard[prop].test(candidate[prop])) {
+          return false;
+        }
+
+      // array
+      } else if (standard[prop] instanceof Array) {
+        for (var i = 0; i < standard[prop].length; i += 1) {
+          if (!deepCompare(candidate[prop][i], standard[prop][i])) {
+            return false;
+          }
+        }
+
+      // object
+      } else if (typeof standard[prop] === 'object') {
+        if (!deepCompare(candidate[prop], standard[prop])) {
+          return false;
+        }
+
+      // primative case
+      } else if (candidate[prop] !== standard[prop]) {
+        return false;
+      }
+    }
+  }
+  return true;
 };
 
-EventEmitter.prototype.removeListener = function(type, listener) {
-  if ('function' !== typeof listener) {
-    throw new Error('removeListener only takes instances of Function');
-  }
+},{}],6:[function(require,module,exports){
+// mark angular modules with "ngModule"
 
-  // does not use listeners(), so no side effect of creating _events[type]
-  if (!this._events || !this._events[type]) return this;
+var deepApply = require('../lib/deep-apply');
+var clone = require('clone');
 
-  var list = this._events[type];
+var modSigs = [ require('../signatures/module') ].
+  concat(require('../signatures/simple'));
 
-  if (isArray(list)) {
-    var i = indexOf(list, listener);
-    if (i < 0) return this;
-    list.splice(i, 1);
-    if (list.length == 0)
-      delete this._events[type];
-  } else if (this._events[type] === listener) {
-    delete this._events[type];
-  }
+var refSigs = [
+  require('../signatures/assign'),
+  require('../signatures/decl')
+];
 
-  return this;
+var idSigs = clone(require('../signatures/simple'));
+
+var markPass = module.exports = {};
+
+markPass.name = 'angular:annotator:mark';
+markPass.prereqs = [];
+markPass.run = function (ast, info) {
+
+  var moduleIds = [];
+
+  var findModules = function () {
+    var res = false;
+    deepApply(ast, modSigs, function (chunk) {
+      if (!chunk.ngModule) {
+        chunk.ngModule = true;
+        res = true;
+      }
+    });
+    return res;
+  };
+
+  var findRefs = function () {
+    var refs = false,
+      res = false;
+
+    // find refs
+
+    deepApply(ast, refSigs, function (chunk) {
+      var id = chunk.id ?
+        chunk.id.name :
+        chunk.expression.left.name;
+
+      if (moduleIds.indexOf(id) === -1) {
+        moduleIds.push(id);
+        refs = true;
+      }
+    });
+
+    // mark refs
+
+    if (refs) {
+
+      // update idSigs
+      var namedModuleMemberExpression = {
+        "type": "Identifier",
+        "name": new RegExp('^(' + moduleIds.join('|') + ')$')
+      };
+      idSigs = idSigs.map(function (signature) {
+        signature.callee.object = namedModuleMemberExpression;
+        return signature;
+      });
+
+      deepApply(ast, idSigs, function (chunk) {
+        if (!chunk.ngModule) {
+          chunk.callee.object.ngModule = true;
+          res = true;
+        }
+      });
+    }
+
+    return res;
+  };
+
+  while (findModules() || findRefs());
 };
 
-EventEmitter.prototype.removeAllListeners = function(type) {
-  if (arguments.length === 0) {
-    this._events = {};
+},{"../lib/deep-apply":16,"../signatures/module":18,"../signatures/simple":19,"../signatures/assign":20,"../signatures/decl":21,"clone":14}],26:[function(require,module,exports){
+
+// TODO: investigate using falafel:
+//       https://github.com/substack/node-falafel
+//       or Rocambole:
+//       https://github.com/millermedeiros/rocambole/
+
+var deepCompare = require('./lib/deep-compare');
+var deepApply = require('./lib/deep-apply');
+
+var Pass = function () {
+  this._matchers = [];
+  this._do = function () {}; // noop
+
+  this.prereqs = [];
+};
+
+Pass.prototype.run = function (ast, info) {
+  var d = this._do;
+  var name = this.name;
+
+  info[name] = {};
+
+  deepApply(ast, this._matchers, function (chunk) {
+    info[name] = d(chunk, info);
+  });
+
+  return info[name];
+};
+
+Pass.prototype.when = function (matcher) {
+  if (matcher instanceof Array) {
+    matcher.forEach(function (m) {
+      this.when(m);
+    }, this);
     return this;
   }
-
-  // does not use listeners(), so no side effect of creating _events[type]
-  if (type && this._events && this._events[type]) this._events[type] = null;
-  return this;
-};
-
-EventEmitter.prototype.listeners = function(type) {
-  if (!this._events) this._events = {};
-  if (!this._events[type]) this._events[type] = [];
-  if (!isArray(this._events[type])) {
-    this._events[type] = [this._events[type]];
+  if (typeof matcher === 'function') {
+    this._matchers.push(matcher);
+    return this;
   }
-  return this._events[type];
+  if (typeof matcher === 'object') {
+    this._matchers.push(function (chunk) {
+      return deepCompare(chunk, matcher);
+    });
+    return this;
+  }
+  throw new Error("Matcher expected to be an AST chunk object or a function");
 };
 
-})(require("__browserify_process"))
-},{"__browserify_process":24}],20:[function(require,module,exports){
-"use strict";
+Pass.prototype.do = function (fn) {
+  this._do = fn;
+};
 
-/**
- * Simple flat clone using prototype, accepts only objects, usefull for property
- * override on FLAT configuration object (no nested props).
- *
- * USE WITH CAUTION! This may not behave as you wish if you do not know how this
- * works.
+module.exports = function () {
+  return new Pass();
+};
+
+},{"./lib/deep-compare":27,"./lib/deep-apply":28}],27:[function(require,module,exports){
+/*
+ * Checks each property of the standard recursively against the candidate,
+ * ignoring additional properties of the candidate.
+ * Returns true iff the candidate matches each of the standard's
+ * properties
  */
-function clonePrototype(parent) {
-  if (parent === null)
-    return null;
 
-  var ctor = function () {};
-  ctor.prototype = parent;
-  return new ctor();
-}
+var deepCompare = module.exports = function (candidate, standard) {
+  if (!standard && !candidate) {
+    return true;
+  } else if (standard && !candidate) {
+    return false;
+  }
+  for (var prop in standard) {
+    if (standard.hasOwnProperty(prop)) {
 
-module.exports = clonePrototype;
+      // undefinded case
+      if (!candidate[prop]) {
+        return false;
 
-},{}],21:[function(require,module,exports){
+      // regex
+      } else if (standard[prop] instanceof RegExp) {
+        if (!standard[prop].test(candidate[prop])) {
+          return false;
+        }
+
+      // array
+      } else if (standard[prop] instanceof Array) {
+        for (var i = 0; i < standard[prop].length; i += 1) {
+          if (!deepCompare(candidate[prop][i], standard[prop][i])) {
+            return false;
+          }
+        }
+
+      // object
+      } else if (typeof standard[prop] === 'object') {
+        if (!deepCompare(candidate[prop], standard[prop])) {
+          return false;
+        }
+
+      // primative case
+      } else if (candidate[prop] !== standard[prop]) {
+        return false;
+      }
+    }
+  }
+  return true;
+};
+
+},{}],28:[function(require,module,exports){
+/*
+ * Checks each property of the standard recursively against the candidate,
+ * runs `cb` on all branches that match the standard
+ */
+
+var deepApply = module.exports = function (candidate, standards, cb) {
+
+  // per-order depth-first
+  for (var prop in candidate) {
+    if (candidate.hasOwnProperty(prop)) {
+
+      // array
+      if (candidate[prop] instanceof Array) {
+        for (var i = 0; i < candidate[prop].length; i += 1) {
+          deepApply(candidate[prop][i], standards, cb);
+        }
+
+      // object
+      } else if (typeof candidate[prop] === 'object') {
+        deepApply(candidate[prop], standards, cb);
+      }
+    }
+  }
+
+  standards.forEach(function (standard) {
+    if (standard(candidate)) {
+      cb(candidate);
+    }
+  });
+};
+
+},{}],22:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -12027,7 +11727,7 @@ define(function (require, exports, module) {
 
 });
 
-},{"./base64-vlq":25,"./util":26,"./array-set":27,"amdefine":28}],22:[function(require,module,exports){
+},{"./base64-vlq":29,"./util":30,"./array-set":31,"amdefine":32}],23:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -12455,7 +12155,7 @@ define(function (require, exports, module) {
 
 });
 
-},{"./util":26,"./binary-search":29,"./array-set":27,"./base64-vlq":25,"amdefine":28}],23:[function(require,module,exports){
+},{"./util":30,"./binary-search":33,"./array-set":31,"./base64-vlq":29,"amdefine":32}],24:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -12810,8 +12510,62 @@ define(function (require, exports, module) {
 
 });
 
-},{"./source-map-generator":21,"./util":26,"amdefine":28}],28:[function(require,module,exports){
-(function(process){/** vim: et:ts=4:sw=4:sts=4
+},{"./source-map-generator":22,"./util":30,"amdefine":32}],34:[function(require,module,exports){
+// shim for using process in browser
+
+var process = module.exports = {};
+
+process.nextTick = (function () {
+    var canSetImmediate = typeof window !== 'undefined'
+    && window.setImmediate;
+    var canPost = typeof window !== 'undefined'
+    && window.postMessage && window.addEventListener
+    ;
+
+    if (canSetImmediate) {
+        return function (f) { return window.setImmediate(f) };
+    }
+
+    if (canPost) {
+        var queue = [];
+        window.addEventListener('message', function (ev) {
+            if (ev.source === window && ev.data === 'process-tick') {
+                ev.stopPropagation();
+                if (queue.length > 0) {
+                    var fn = queue.shift();
+                    fn();
+                }
+            }
+        }, true);
+
+        return function nextTick(fn) {
+            queue.push(fn);
+            window.postMessage('process-tick', '*');
+        };
+    }
+
+    return function nextTick(fn) {
+        setTimeout(fn, 0);
+    };
+})();
+
+process.title = 'browser';
+process.browser = true;
+process.env = {};
+process.argv = [];
+
+process.binding = function (name) {
+    throw new Error('process.binding is not supported');
+}
+
+// TODO(shtylman)
+process.cwd = function () { return '/' };
+process.chdir = function (dir) {
+    throw new Error('process.chdir is not supported');
+};
+
+},{}],32:[function(require,module,exports){
+(function(process,__filename){/** vim: et:ts=4:sw=4:sts=4
  * @license amdefine 0.0.5 Copyright (c) 2011, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/amdefine for details
@@ -13111,8 +12865,8 @@ function amdefine(module, require) {
 
 module.exports = amdefine;
 
-})(require("__browserify_process"))
-},{"path":30,"__browserify_process":24}],30:[function(require,module,exports){
+})(require("__browserify_process"),"/node_modules/escodegen/node_modules/source-map/node_modules/amdefine/amdefine.js")
+},{"path":35,"__browserify_process":34}],35:[function(require,module,exports){
 (function(process){function filter (xs, fn) {
     var res = [];
     for (var i = 0; i < xs.length; i++) {
@@ -13290,7 +13044,7 @@ exports.relative = function(from, to) {
 };
 
 })(require("__browserify_process"))
-},{"__browserify_process":24}],25:[function(require,module,exports){
+},{"__browserify_process":34}],29:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -13436,7 +13190,7 @@ define(function (require, exports, module) {
 
 });
 
-},{"./base64":31,"amdefine":28}],26:[function(require,module,exports){
+},{"./base64":36,"amdefine":32}],30:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -13529,7 +13283,7 @@ define(function (require, exports, module) {
 
 });
 
-},{"amdefine":28}],27:[function(require,module,exports){
+},{"amdefine":32}],31:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -13627,7 +13381,7 @@ define(function (require, exports, module) {
 
 });
 
-},{"./util":26,"amdefine":28}],29:[function(require,module,exports){
+},{"./util":30,"amdefine":32}],33:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -13710,7 +13464,7 @@ define(function (require, exports, module) {
 
 });
 
-},{"amdefine":28}],31:[function(require,module,exports){
+},{"amdefine":32}],36:[function(require,module,exports){
 /* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
@@ -13754,5 +13508,5 @@ define(function (require, exports, module) {
 
 });
 
-},{"amdefine":28}]},{},[1])
+},{"amdefine":32}]},{},[1])
 ;
