@@ -1,5 +1,9 @@
 var app = angular.module('myApp', []);
 
+app.config(function($locationProvider) {
+  $locationProvider.setHtml5Mode(true);
+});
+
 app.controller('MainController', function($scope) {});
 
 app.directive('myDirective', function($location) {
@@ -15,4 +19,8 @@ app.provider('Service', function($location) {
 
 app.provider('OtherService', {
   $get: function($window) {}
+});
+
+app.run(function($window) {
+  $window.alert('test!');
 });

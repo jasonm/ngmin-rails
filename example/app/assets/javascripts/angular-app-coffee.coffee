@@ -1,5 +1,8 @@
 app = angular.module 'myApp', []
 
+app.config ($locationProvider) ->
+  $locationProvider.setHtml5Mode(true)
+
 app.controller 'MainController', ($scope) ->
 
 app.directive 'myDirective', ($location) ->
@@ -12,3 +15,6 @@ app.provider 'Service', ($location) ->
 
 app.provider 'OtherService',
   $get: ($window) ->
+
+app.run ($window) ->
+  $window.alert 'test!'
