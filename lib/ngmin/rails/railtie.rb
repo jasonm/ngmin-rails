@@ -5,6 +5,7 @@ module Ngmin
     class Railtie < ::Rails::Railtie
       initializer "ngmin-rails.add_ngmin_postprocessor", :group => :all do |app|
         app.assets.register_postprocessor 'application/javascript', Ngmin::Processor
+        app.assets.register_bundle_processor 'application/javascript', Ngmin::Processor
       end
     end
   end
