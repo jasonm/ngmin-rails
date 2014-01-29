@@ -12,7 +12,11 @@ module Ngmin
     end
 
     def evaluate(context, locals)
-      @context.call 'window.annotate', data
+      if context.pathname.basename.to_s.match(/.*\.(ejs).*/)
+        data
+      else
+        @context.call 'window.annotate', data
+      end
     end
   end
 end
