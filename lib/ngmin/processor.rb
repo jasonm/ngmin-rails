@@ -1,4 +1,5 @@
 require 'sprockets/processor'
+require 'execjs'
 
 module Ngmin
   class Processor < Sprockets::Processor
